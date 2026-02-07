@@ -2,102 +2,91 @@ import { useState, useEffect, useRef } from "react";
 import { X, Send, Loader2Icon } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { clearChat } from "../app/features/chatSlice";
+import { useAuth, useUser } from "@clerk/clerk-react";
 import { format } from "date-fns";
+import { toast } from "react-hot-toast";
+import api from "../configs/axios";
 
 const ChatBox = () => {
-    const { listing, isOpen } = useSelector((state) => state.chat);
+    const { listing, isOpen, chatId } = useSelector((state) => state.chat);
+
     const dispatch = useDispatch();
+    const { user } = useUser();
+    const { getToken } = useAuth();
 
-    // Mock User ID for frontend simulation
-    const currentUserId = "user_123"; 
-
-    // State
+    const [chat, setChat] = useState(null);
     const [messages, setMessages] = useState([]);
     const [newMessage, setNewMessage] = useState("");
     const [isLoading, setIsLoading] = useState(true);
+    const [isSending, setIsSending] = useState(false);
     const messagesEndRef = useRef(null);
 
-    // Initial Dummy Data Load
-    useEffect(() => {
-        if (listing && isOpen) {
-            setIsLoading(true);
-            // Simulate API delay
-            const timer = setTimeout(() => {
-                setMessages([
-                    {
-                        id: 1,
-                        message: `Hi! Is this ${listing.title} still available?`,
-                        sender_id: currentUserId,
-                        createdAt: new Date(Date.now() - 100000).toISOString(),
-                    },
-                    {
-                        id: 2,
-                        message: "Yes, it is! Let me know if you have any questions.",
-                        sender_id: "seller_456",
-                        createdAt: new Date(Date.now() - 80000).toISOString(),
-                    }
-                ]);
-                setIsLoading(false);
-            }, 800);
-
-            return () => clearTimeout(timer);
+    const fetchChat = async () => {
+        try {
+            const token = await getToken();
+            const { data } = await api.post("/api/chat", { listingId: listing.id, chatId }, { headers: { Authorization: `Bearer ${token}` } });
+            setChat(data?.chat);
+            setMessages(data?.chat?.messages || []);
+            setIsLoading(false);
+        } catch (error) {
+            toast.error(error?.response?.data?.message || error?.message);
+            console.log(error);
         }
-    }, [listing, isOpen]);
+    };
 
-    // Auto Scroll
+    useEffect(() => {
+        if (listing) {
+            fetchChat();
+            const interval = setInterval(() => {
+                fetchChat();
+            }, 3000);
+            return () => clearInterval(interval);
+        }
+    }, [listing]);
+
+    // --- Auto Scroll ---
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [messages.length, isOpen]);
+    }, [messages.length]);
 
-    // Cleanup on close
     useEffect(() => {
         if (!isOpen) {
+            setChat(null);
             setMessages([]);
-            setNewMessage("");
             setIsLoading(true);
+            setNewMessage("");
+            setIsSending(false);
         }
-    }, [isOpen]);
+    }, [isOpen])
 
-    const handleSendMessage = (e) => {
+    const handleSendMessage = async (e) => {
         e.preventDefault();
-        if (!newMessage.trim()) return;
+        if (!newMessage.trim() || isSending) return;
+        try {
+            setIsSending(true);
+            const token = await getToken();
+            const { data } = await api.post("/api/chat/send-message", { chatId: chat.id, message: newMessage }, { headers: { Authorization: `Bearer ${token}` } });
+            setMessages([...messages, data.newMessage]);
+            setNewMessage("");
+            setIsSending(false);
 
-        // Create a local message object
-        const tempMessage = {
-            id: Date.now(),
-            message: newMessage,
-            sender_id: currentUserId,
-            createdAt: new Date().toISOString(),
-        };
-
-        // Update state immediately (Optimistic UI)
-        setMessages((prev) => [...prev, tempMessage]);
-        setNewMessage("");
-        
-        // Optional: Simulate a reply from the "seller" after 2 seconds
-        setTimeout(() => {
-            const replyMessage = {
-                id: Date.now() + 1,
-                message: "This is a demo reply since there is no backend!",
-                sender_id: "seller_456",
-                createdAt: new Date().toISOString(),
-            };
-            setMessages((prev) => [...prev, replyMessage]);
-        }, 2000);
+        } catch (error) {
+            toast.error(error?.response?.data?.message || error?.message);
+            console.log(error);
+            setIsSending(false);
+        }
     };
 
     if (!isOpen || !listing) return null;
 
     return (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur bg-opacity-50 z-50 flex items-center justify-center sm:p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur bg-opacity-50 z-100 flex items-center justify-center sm:p-4">
             <div className="bg-white sm:rounded-lg shadow-2xl w-full max-w-2xl h-screen sm:h-[600px] flex flex-col">
                 {/* Header */}
                 <div className="bg-gradient-to-r from-indigo-600 to-indigo-400 text-white p-4 sm:rounded-t-lg flex items-center justify-between">
                     <div className="flex-1 min-w-0">
                         <h3 className="font-semibold text-lg truncate">{listing?.title}</h3>
-                        <p className="text-sm text-indigo-100 truncate">
-                            Chatting with seller ({listing?.owner?.name || 'Seller'})
-                        </p>
+                        <p className="text-sm text-indigo-100 truncate">{user.id === listing?.ownerId ? `Chatting with buyer (${chat?.chatUser?.name || 'Loading...'})` : `Chatting with seller (${chat?.ownerUser?.name || 'Loading...'})`}</p>
                     </div>
                     <button onClick={() => dispatch(clearChat())} className="ml-4 p-1 hover:bg-white/20 hover:bg-opacity-20 rounded-lg transition-colors">
                         <X className="w-5 h-5" />
@@ -119,10 +108,10 @@ const ChatBox = () => {
                         </div>
                     ) : (
                         messages.map((message) => (
-                            <div key={message.id} className={`flex ${message.sender_id === currentUserId ? "justify-end" : "justify-start"}`}>
-                                <div className={`max-w-[70%] rounded-lg p-3 pb-1 ${message.sender_id === currentUserId ? "bg-indigo-600 text-white" : "bg-white border border-gray-200 text-gray-800"}`}>
+                            <div key={message.id} className={`flex ${message.sender_id === user.id ? "justify-end" : "justify-start"}`}>
+                                <div className={`max-w-[70%] rounded-lg p-3 pb-1 ${message.sender_id === user.id ? "bg-indigo-600 text-white" : "bg-white border border-gray-200 text-gray-800"}`}>
                                     <p className="text-sm break-words whitespace-pre-wrap">{message.message}</p>
-                                    <p className={`text-[10px] mt-1 ${message.sender_id === currentUserId ? "text-indigo-200" : "text-gray-400"}`}>{format(new Date(message.createdAt), "MMM dd 'at' h:mm a")}</p>
+                                    <p className={`text-[10px] mt-1 ${message.sender_id === user.id ? "text-indigo-200" : "text-gray-400"}`}>{format(new Date(message.createdAt), "MMM dd 'at' h:mm a")}</p>
                                 </div>
                             </div>
                         ))
@@ -131,27 +120,33 @@ const ChatBox = () => {
                 </div>
 
                 {/* Input Area */}
-                <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-gray-200 rounded-b-lg">
-                    <div className="flex items-end space-x-2">
-                        <textarea
-                            value={newMessage}
-                            onChange={(e) => setNewMessage(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                    e.preventDefault();
-                                    handleSendMessage(e);
-                                }
-                            }}
-                            placeholder="Type your message..."
-                            className="flex-1 resize-none border border-gray-300 rounded-lg px-4 py-2 focus:outline-indigo-500 max-h-32"
-                            rows={1}
-                        />
-                        <button type="submit" disabled={!newMessage.trim()} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-lg disabled:opacity-50 transition-colors">
-                            <Send className="w-5 h-5" />
-                        </button>
+                {chat?.listing?.status === "active" ? (
+                    <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-gray-200 rounded-b-lg">
+                        <div className="flex items-end space-x-2">
+                            <textarea
+                                value={newMessage}
+                                onChange={(e) => setNewMessage(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" && !e.shiftKey) {
+                                        e.preventDefault();
+                                        handleSendMessage(e);
+                                    }
+                                }}
+                                placeholder="Type your message..."
+                                className="flex-1 resize-none border border-gray-300 rounded-lg px-4 py-2 focus:outline-indigo-500 max-h-32"
+                                rows={1}
+                            />
+                            <button type="submit" disabled={!newMessage.trim() || isSending} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-lg disabled:opacity-50 transition-colors">
+                                {isSending ? <Loader2Icon className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                            </button>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">Press Enter to send, Shift+Enter for new line</p>
+                    </form>
+                ) : (
+                    <div className="p-4 bg-white border-t border-gray-200 rounded-b-lg">
+                        <p className="text-sm text-gray-600 text-center"> {chat ? `Listing is ${chat?.listing?.status}` : "Loading chat..."}</p>
                     </div>
-                    <p className="text-xs text-gray-500 mt-2">Press Enter to send, Shift+Enter for new line</p>
-                </form>
+                )}
             </div>
         </div>
     );

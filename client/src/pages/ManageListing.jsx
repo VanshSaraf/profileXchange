@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Loader2Icon, Upload } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '@clerk/clerk-react';
 import { toast } from 'react-hot-toast';
-import { useSelector } from 'react-redux';
+import api from '../configs/axios';
+import { useDispatch, useSelector } from 'react-redux';
+import { getAllPublicListing, getAllUserListing } from '../app/features/listingSlice';
 
 const ManageListing = () => {
     const { id } = useParams();
     const navigate = useNavigate();
-    
-    // Read-only access to Redux to find the listing for editing
+    const { getToken } = useAuth();
+    const dispatch = useDispatch();
     const { userListings } = useSelector((state) => state.listing);
 
     const [loadingListing, setLoadingListing] = useState(false);
@@ -39,7 +42,7 @@ const ManageListing = () => {
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
 
-    const handleImageUpload = (event) => {
+    const handleImageUpload = async (event) => {
         const files = Array.from(event.target.files);
         if (!files.length) return;
         if (files.length + formData.images.length > 5) return toast.error('You can add up to 5 images');
@@ -54,44 +57,71 @@ const ManageListing = () => {
         }));
     };
 
-    // Load data for Edit Mode (Client-side lookup only)
+    // get listing data for edit if `id` is provided (edit mode)
     useEffect(() => {
         if (!id) return;
 
         setIsEditing(true);
         setLoadingListing(true);
 
-        // Simulate a short delay to look like a fetch
-        setTimeout(() => {
-            const listing = userListings.find((listing) => listing.id === id);
-            
-            if (listing) {
-                setFormData(listing);
-            } else {
-                toast.error('Listing not found (Check Redux State)');
-                navigate('/my-listings');
-            }
+        const listing = userListings.find((listing) => listing.id === id);
+        if (listing) {
+            setFormData(listing);
             setLoadingListing(false);
-        }, 500);
-        
-    }, [id, userListings, navigate]);
+        } else {
+            toast.error('Listing not found');
+            navigate('/my-listings');
+        }
+    }, [id]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        
-        toast.loading(isEditing ? 'Updating listing...' : 'Creating listing...');
+        toast.loading('Saving...');
+        const dataCopy = structuredClone(formData);
+        try {
+            if (isEditing) {
+                dataCopy.images = formData.images.filter((image) => typeof image === 'string');
 
-        // Mock Submission Logic
-        setTimeout(() => {
-            console.log("--------------- MOCK SUBMISSION ---------------");
-            console.log("Mode:", isEditing ? "EDIT" : "CREATE");
-            console.log("Payload:", formData);
-            console.log("-----------------------------------------------");
+                const formDataInstance = new FormData();
+                formDataInstance.append('accountDetails', JSON.stringify(dataCopy));
 
+                formData.images
+                    .filter((image) => typeof image !== 'string')
+                    .forEach((image) => {
+                        formDataInstance.append('images', image);
+                    });
+
+                const token = await getToken();
+
+                const { data } = await api.put('/api/listing', formDataInstance, { headers: { Authorization: `Bearer ${token}` } });
+                toast.dismissAll();
+                toast.success(data.message);
+                dispatch(getAllUserListing({ getToken }));
+                dispatch(getAllPublicListing());
+                navigate('/my-listings');
+            } else {
+                delete dataCopy.images;
+
+                const formDataInstance = new FormData();
+                formDataInstance.append('accountDetails', JSON.stringify(dataCopy));
+
+                formData.images.forEach((image) => {
+                    formDataInstance.append('images', image);
+                });
+
+                const token = await getToken();
+
+                const { data } = await api.post(`/api/listing`, formDataInstance, { headers: { Authorization: `Bearer ${token}` } });
+                toast.dismissAll();
+                toast.success(data.message);
+                dispatch(getAllUserListing({ getToken }));
+                dispatch(getAllPublicListing());
+                navigate('/my-listings');
+            }
+        } catch (error) {
             toast.dismissAll();
-            toast.success(isEditing ? "Listing updated successfully" : "Listing created successfully");
-            navigate('/my-listings');
-        }, 1500);
+            toast.error(error?.response?.data?.message || error.message);
+        }
     };
 
     if (loadingListing) {
@@ -103,7 +133,7 @@ const ManageListing = () => {
     }
 
     return (
-        <div className='min-h-screen mt-10 py-8'>
+        <div className='min-h-screen py-8'>
             <div className='max-w-4xl mx-auto px-4 sm:px-6 lg:px-8'>
                 <div className='mb-8'>
                     <h1 className='text-3xl font-bold text-gray-800'>{isEditing ? 'Edit Listing' : 'List Your Account'}</h1>
@@ -161,12 +191,7 @@ const ManageListing = () => {
                             <div className='grid grid-cols-2 md:grid-cols-4 gap-4 mt-4'>
                                 {formData.images.map((img, index) => (
                                     <div key={index} className='relative'>
-                                        {/* Handle both File objects (new) and URL strings (existing) */}
-                                        <img 
-                                            src={typeof img === 'string' ? img : URL.createObjectURL(img)} 
-                                            alt={`image ${index + 1}`} 
-                                            className='w-full h-24 object-cover rounded-lg' 
-                                        />
+                                        <img src={typeof img === 'string' ? img : URL.createObjectURL(img)} alt={`image ${index + 1}`} className='w-full h-24 object-cover rounded-lg' />
                                         <button type='button' onClick={() => removeImage(index)} className='absolute -top-2 -right-2 size-6 bg-red-600 text-white rounded-full hover:bg-red-700'>
                                             x
                                         </button>
