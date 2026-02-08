@@ -1,139 +1,181 @@
 import { Inngest } from "inngest";
 import prisma from "../configs/prisma.js";
+import sendEmail from "../configs/nodemailer.js";
 
 // Create a client to send and receive events
-export const inngest = new Inngest({ id: "profileexchange" });
+export const inngest = new Inngest({ id: "profile-marketplace" });
 
-/**
- * 1. Sync User Creation/Update from Clerk
- * Uses upsert to handle both creation and updates in one atomic operation.
- */
+// Inngest Function to save user data to a database
 const syncUserCreation = inngest.createFunction(
     { id: 'sync-user-from-clerk' },
     { event: 'clerk/user.created' },
-    async ({ event, step }) => {
-        const { data } = event;
-        const email = data?.email_addresses?.[0]?.email_address;
-        const fullName = `${data?.first_name || ""} ${data?.last_name || ""}`.trim();
+    async ({ event }) => {
+        const { data } = event
 
-        await step.run("upsert-user", async () => {
-            return await prisma.user.upsert({
-                where: { id: data.id },
-                update: {
-                    email: email,
-                    name: fullName,
-                    image: data?.image_url,
-                },
-                create: {
-                    id: data.id,
-                    email: email,
-                    name: fullName,
-                    image: data?.image_url,
-                }
-            });
+        // Check if user already exists in the database
+        const user = await prisma.user.findFirst({
+            where: { id: data.id }
         });
-    }
-);
 
-/**
- * 2. Sync User Deletion
- * Logic: If the user has active business data, we deactivate listings instead of deleting the record.
- */
-const syncUserDeletion = inngest.createFunction(
-    { id: 'delete-user-with-clerk' },
-    { event: 'clerk/user.deleted' },
-    async ({ event, step }) => {
-        const { data } = event;
-
-        await step.run("handle-user-cleanup", async () => {
-            const [listingsCount, chatsCount, transactionsCount] = await Promise.all([
-                prisma.listing.count({ where: { ownerId: data.id } }),
-                prisma.chat.count({ 
-                    where: { OR: [{ ownerUserId: data.id }, { chatUserId: data.id }] } 
-                }),
-                prisma.transaction.count({ where: { userId: data.id } })
-            ]);
-
-            if (listingsCount === 0 && chatsCount === 0 && transactionsCount === 0) {
-                return await prisma.user.delete({ where: { id: data.id } });
-            } else {
-                // Soft delete approach: deactivate listings if history exists
-                return await prisma.listing.updateMany({
-                    where: { ownerId: data.id },
-                    data: { status: "inactive" }
-                });
-            }
-        });
-    }
-);
-
-/**
- * 3. Sync User Updates
- */
-const syncUserUpdation = inngest.createFunction(
-    { id: 'update-user-from-clerk' },
-    { event: 'clerk/user.updated' },
-    async ({ event, step }) => {
-        const { data } = event;
-        await step.run("update-user-record", async () => {
-            return await prisma.user.update({
+        // Check if user already exists in the database
+        if (user) {
+            // Update user data if it exists
+            await prisma.user.update({
                 where: { id: data.id },
                 data: {
                     email: data?.email_addresses[0]?.email_address,
-                    name: `${data?.first_name || ""} ${data?.last_name || ""}`.trim(),
+                    name: data?.first_name + " " + data?.last_name,
                     image: data?.image_url,
                 }
             });
+            return;
+        }
+
+        await prisma.user.create({
+            data: {
+                id: data.id,
+                email: data?.email_addresses[0]?.email_address,
+                name: data?.first_name + " " + data?.last_name,
+                image: data?.image_url,
+            }
         });
     }
-);
+)
 
-/**
- * 4. Process Purchase (Internal Logic Only)
- * Fetches data for the purchase. Removed Nodemailer logic.
- */
-// const processPurchase = inngest.createFunction(
-//     { id: 'process-purchase' },
-//     { event: "app/purchase" },
-//     async ({ event, step }) => {
-//         const { transaction } = event.data;
+// Inngest Function to delete user from database
+const syncUserDeletion = inngest.createFunction(
+    { id: 'delete-user-with-clerk' },
+    { event: 'clerk/user.deleted' },
+    async ({ event }) => {
 
-//         await step.run("get-purchase-details", async () => {
-//             const customer = await prisma.user.findUnique({ where: { id: transaction.userId } });
-//             const listing = await prisma.listing.findUnique({ where: { id: transaction.listingId } });
-//             const credential = await prisma.credential.findFirst({ where: { listingId: transaction.listingId } });
+        const { data } = event;
 
-//             // Logic for what happens after purchase (e.g., logging or status updates)
-//             return { customerEmail: customer?.email, listingTitle: listing?.title };
-//         });
-//     }
-// );
+        const listings = await prisma.listing.findMany({
+            where: { ownerId: data.id }
+        })
 
-/**
- * 5. Handle Listing Deletion (Internal Logic Only)
- * Fetches credentials for the deleted listing. Removed Nodemailer logic.
- */
-// const handleListingDeletion = inngest.createFunction(
-//     { id: 'handle-listing-deletion' },
-//     { event: "app/listing-deleted" },
-//     async ({ event, step }) => {
-//         const { listingId } = event.data;
+        const chats = await prisma.chat.findMany({
+            where: { OR: [{ ownerUserId: data.id }, { chatUserId: data.id }] }
+        })
 
-//         await step.run("fetch-credentials", async () => {
-//             return await prisma.credential.findFirst({
-//                 where: { listingId },
-//             });
-//         });
-        
-//         // You could add logic here to archive the credentials elsewhere
-//     }
-// );
+        const transactions = await prisma.transaction.findMany({
+            where: { userId: data.id }
+        })
 
-// Exporting functions for the Inngest handler
+        if (listings.length === 0 && chats.length === 0 && transactions.length === 0) {
+            await prisma.user.delete({ where: { id: data.id } });
+        } else {
+            await prisma.listing.updateMany({
+                where: { ownerId: data.id },
+                data: { status: "inactive" }
+            })
+        }
+    }
+)
+
+// Inngest Function to update user data in database 
+const syncUserUpdation = inngest.createFunction(
+    { id: 'update-user-from-clerk' },
+    { event: 'clerk/user.updated' },
+    async ({ event }) => {
+        const { data } = event;
+        await prisma.user.update({
+            where: {
+                id: data.id,
+            },
+            data: {
+                email: data?.email_addresses[0]?.email_address,
+                name: data?.first_name + " " + data?.last_name,
+                image: data?.image_url,
+            }
+        });
+    }
+)
+
+// Inngest Function to send purchase email to the customer
+const sendPurchaseEmail = inngest.createFunction(
+    { id: 'send-purchase-email' },
+    { event: "app/purchase" },
+    async ({ event }) => {
+
+        const { transaction } = event.data;
+
+        const customer = await prisma.user.findFirst({
+            where: { id: transaction.userId },
+        });
+
+        const listing = await prisma.listing.findFirst({
+            where: { id: transaction.listingId },
+        });
+
+        const credential = await prisma.credential.findFirst({
+            where: { listingId: transaction.listingId },
+        });
+
+        await sendEmail({
+            to: customer.email,
+            subject: "Your Credentials for the account you purchased",
+            html: `
+                        <h2>Thank you for purchasing account @${listing.username} of ${listing.platform} platform</h2>
+                        <p>Here are your credentials for the listing you purchased.</p>
+                        
+                        <h3>New Credentials</h3>
+                        <div>
+                            ${credential.updatedCredential.map((cred) => `<p>${cred.name} : ${cred.value}</p>`).join("")}
+                        </div>
+                        <p>If you have any questions, please contact us at <a href="mailto:support@example.com">support@example.com</a></p>
+                    `,
+        });
+
+    }
+)
+
+
+// Inngest Function to send new credentials for deleted listings
+const sendNewCredentials = inngest.createFunction(
+    { id: 'send-new-credentials' },
+    { event: "app/listing-deleted" },
+    async ({ event }) => {
+        const { listing, listingId } = event.data;
+
+        const newCredential = await prisma.credential.findFirst({
+            where: { listingId },
+        });
+
+        if (newCredential) {
+            await sendEmail({
+                to: listing.owner.email,
+                subject: "New Credentials for your deleted listing",
+                html: `
+                    <h2>Your new credentials for your deleted listing :</h2>
+                    title : ${listing.title} 
+                    <br/>
+                    username : ${listing.username}
+                    <br/>
+                    platform : ${listing.platform}
+                    <br/>
+                    <h3>New Credentials</h3>
+                    <div>
+                        ${newCredential.updatedCredential.map((cred) => `<p>${cred.name} : ${cred.value}</p>`).join("")}
+                    </div>
+                    <h3>Old Credentials</h3>
+                    <div>
+                        ${newCredential.originalCredential.map((cred) => `<p>${cred.name} : ${cred.value}</p>`).join("")}
+                    </div>
+
+                    <p>If you have any questions, please contact us at <a href="mailto:support@example.com">support@example.com</a></p>
+                    `,
+            });
+        }
+
+    }
+)
+
+// Inngest functions 
 export const functions = [
     syncUserCreation,
     syncUserDeletion,
     syncUserUpdation,
-    // processPurchase,
-    // handleListingDeletion
+    sendPurchaseEmail,
+    sendNewCredentials
 ];

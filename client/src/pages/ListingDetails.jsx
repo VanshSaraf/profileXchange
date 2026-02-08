@@ -241,7 +241,7 @@ export default function ListingDetails() {
             {/* Footer */}
             <div className='bg-white border-t border-gray-200 p-4 text-center mt-28'>
                 <p className='text-sm text-gray-500'>
-                    © {new Date().getFullYear()} <span className='text-indigo-600'> Profile Marketplace</span> All rights reserved.
+                    © {new Date().getFullYear()} <span className='text-indigo-600'> ProfileExchange</span> All rights reserved.
                 </p>
             </div>
         </div>

@@ -1,31 +1,30 @@
-import React from 'react'
-import { Route, Routes, useLocation,  } from 'react-router-dom';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import Home from './pages/Home';
-import Marketplace from './pages/Marketplace'
-import MyListings from './pages/MyListings'
-import ListingDetails from './pages/ListingDetails'
-import ManageListing from './pages/ManageListing'
-import Messages from './pages/Messages'
-import MyOrders from './pages/MyOrders'
-import Loading from './pages/Loading'
 import Navbar from './components/Navbar';
+import Marketplace from './pages/Marketplace';
+import MyListings from './pages/MyListings';
+import ListingDetails from './pages/ListingDetails';
+import ManageListing from './pages/ManageListing';
 import ChatBox from './components/ChatBox';
+import Messages from './pages/Messages';
 import { Toaster } from 'react-hot-toast';
+import { useEffect } from 'react';
+import { useDispatch } from 'react-redux';
+import { getAllPublicListing, getAllUserListing } from './app/features/listingSlice';
+import { useAuth, useUser } from '@clerk/clerk-react';
 import Layout from './pages/admin/Layout';
 import Dashboard from './pages/admin/Dashboard';
 import AllListings from './pages/admin/AllListings';
 import CredentialChange from './pages/admin/CredentialChange';
 import CredentialVerify from './pages/admin/CredentialVerify';
 import Transactions from './pages/admin/Transactions';
+import Loading from './pages/Loading';
+import MyOrders from './pages/MyOrders';
 import Withdrawal from './pages/admin/Withdrawal';
-import { useAuth, useUser } from '@clerk/clerk-react';
-import { useDispatch } from 'react-redux';
-import { getAllPublicListing, getAllUserListing } from './app/features/listingSlice';
-import { useEffect } from 'react';
 
 const App = () => {
-  const { pathname } = useLocation();
-  const { getToken } = useAuth();
+    const { pathname } = useLocation();
+    const { getToken } = useAuth();
     const { user, isLoaded } = useUser();
 
     const dispatch = useDispatch();
@@ -40,11 +39,11 @@ const App = () => {
         }
     }, [isLoaded, user]);
 
-  return (
-    <div>
-      <Toaster/>
-        {!pathname.includes('/admin') && <Navbar />}
-      <Routes>
+    return (
+        <div>
+            <Toaster />
+            {!pathname.includes('/admin') && <Navbar />}
+            <Routes>
                 <Route path='/' element={<Home />} />
                 <Route path='/marketplace' element={<Marketplace />} />
                 <Route path='/my-listings' element={<MyListings />} />
@@ -62,13 +61,10 @@ const App = () => {
                     <Route path='transactions' element={<Transactions />} />
                     <Route path='withdrawal' element={<Withdrawal />} />
                 </Route>
-               
-                   
-               
             </Routes>
-    <ChatBox />
-    </div>
-  )
-}
+            <ChatBox />
+        </div>
+    );
+};
 
-export default App
+export default App;
